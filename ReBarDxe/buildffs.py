@@ -38,7 +38,6 @@ def set_nx_compat_flag(pe):
     dllchar = pe.OPTIONAL_HEADER.DllCharacteristics
     dllchar = set_bit(dllchar, 8)  # 8th bit is the nx_compat_flag
     pe.OPTIONAL_HEADER.DllCharacteristics = dllchar
-    pe.merge_modified_section_data()
     return pe
 
 if len(sys.argv) > 1:
@@ -88,19 +87,28 @@ os.chdir(os.path.dirname(ReBarDXE[0]))
 try:
     os.remove("pe32.sec")
     os.remove("name.sec")
+    os.remove("depex.sec")
     os.remove("ReBarDxe.ffs")
 except FileNotFoundError:
     pass
 
+# Generate depex.sec containing gEfiPciRootBridgeIoProtocolGuid (05AD34BA-6F02-4214-952E-4DA0398E2BB9)
+depex_payload = bytes.fromhex("02BA34AD05026F1442952E4DA0398E2BB908")
+with open("depex.raw", "wb") as df:
+    df.write(depex_payload)
+
 subprocess.run(["GenSec", "-o", "pe32.sec", "ReBarDxe.efi", "-S", "EFI_SECTION_PE32"], shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout)
 subprocess.run(["GenSec", "-o", "name.sec", "-S", "EFI_SECTION_USER_INTERFACE", "-n", name], shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout)
-subprocess.run(["GenFfs", "-g", GUID, "-o", "ReBarDxe.ffs", "-i", "pe32.sec", "-i", "name.sec", "-t", "EFI_FV_FILETYPE_DRIVER", "--checksum"], shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout)
+subprocess.run(["GenSec", "-o", "depex.sec", "-S", "EFI_SECTION_DXE_DEPEX", "depex.raw"], shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout)
+subprocess.run(["GenFfs", "-g", GUID, "-o", "ReBarDxe.ffs", "-i", "pe32.sec", "-i", "name.sec", "-i", "depex.sec", "-t", "EFI_FV_FILETYPE_DRIVER", "--checksum"], shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout)
 
 try:
     os.remove("pe32.sec")
     os.remove("name.sec")
+    os.remove("depex.sec")
+    os.remove("depex.raw")
 except FileNotFoundError:
     pass
 
 os.chdir(orig_dir)
-print("Finished building FFS successfully!")
+print("Finished building FFS successfully with DXE DEPEX!")
