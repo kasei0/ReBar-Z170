@@ -98,8 +98,15 @@ try:
 except FileNotFoundError:
     pass
 
-# Generate depex.sec containing gEfiPciRootBridgeIoProtocolGuid (05AD34BA-6F02-4214-952E-4DA0398E2BB9)
-depex_payload = bytes.fromhex("02BA34AD05026F1442952E4DA0398E2BB908")
+# Locate compiler-generated depex or use canonical gEfiPciRootBridgeIoProtocolGuid (2F707EBB-4A1A-11D4-9A38-0090273FC14D)
+depex_files = glob.glob(f"{orig_dir}/Build/ReBarUEFI/**/ReBarDxe.depex", recursive=True)
+if len(depex_files) > 0 and os.path.exists(depex_files[0]):
+    with open(depex_files[0], "rb") as f:
+        depex_payload = f.read()
+else:
+    # EFI_DEP_PUSH (0x02) + gEfiPciRootBridgeIoProtocolGuid (2F707EBB-4A1A-11D4-9A38-0090273FC14D) + EFI_DEP_END (0x08)
+    depex_payload = bytes.fromhex("02BB7E702F1A4AD4119A380090273FC14D08")
+
 with open("depex.raw", "wb") as df:
     df.write(depex_payload)
 
