@@ -10,8 +10,13 @@ SPDX-License-Identifier: MIT
 #include <IndustryStandard/Pci22.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/DebugLib.h>
+#include <Library/DxeServicesTableLib.h>
+#include <Library/BaseLib.h>
 #include "include/pciRegs.h"
 #include "include/PciHostBridgeResourceAllocation.h"
+#include "include/AmiPciHostBridgeInit.h"
+
+EFI_GUID gAmiPciHostBridgeInitProtocolGuid = AMI_PCI_HOST_BRIDGE_INIT_PROTOCOL_GUID;
 
 #ifdef _MSC_VER
 #pragma warning(disable:28251)
@@ -38,6 +43,112 @@ static EFI_PCI_HOST_BRIDGE_RESOURCE_ALLOCATION_PROTOCOL *pciResAlloc;
 static EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL *pciRootBridgeIo;
 
 static EFI_PCI_HOST_BRIDGE_RESOURCE_ALLOCATION_PROTOCOL_PREPROCESS_CONTROLLER o_PreprocessController;
+static EFI_PCI_HOST_BRIDGE_RESOURCE_ALLOCATION_PROTOCOL_NOTIFY_PHASE o_NotifyPhase;
+
+VOID
+SyncAmiPciHostBridgeMetadata (
+  VOID
+  )
+{
+  EFI_STATUS                                Status;
+  VOID                                      *AmiHostBridgeInit;
+  UINT8                                     *Table;
+  UINT64                                    Count;
+  UINT32                                    EntryStatus;
+  UINT32                                    Selector;
+  UINT64                                    Length;
+  UINT64                                    Base;
+  UINT64                                    Cursor;
+  UINT64                                    ExpectedEnd;
+  UINT64                                    DescEnd;
+  EFI_GCD_MEMORY_SPACE_DESCRIPTOR           GcdDesc;
+
+  // 1. Locate AMI HostBridge Init Protocol
+  Status = gBS->LocateProtocol (&gAmiPciHostBridgeInitProtocolGuid, NULL, (VOID **)&AmiHostBridgeInit);
+  if (EFI_ERROR (Status) || AmiHostBridgeInit == NULL) {
+    return;
+  }
+
+  // 2. Obtain Table pointer and RootBridge Count
+  Table = *(UINT8 **)((UINT8 *)AmiHostBridgeInit + AMI_PROTOCOL_TABLE_OFFSET);
+  Count = *(UINT64 *)((UINT8 *)AmiHostBridgeInit + AMI_PROTOCOL_COUNT_OFFSET);
+  if (Table == NULL || Count != 1) {
+    return; // Fail-closed: non-single RootBridge topology or NULL table
+  }
+
+  // 3. Read and strictly validate PMem64 compact aperture entry invariants
+  EntryStatus = ReadUnaligned32 ((CONST UINT32 *)(Table + AMI_RB0_PMEM64_STATUS_OFFSET));
+  Selector    = ReadUnaligned32 ((CONST UINT32 *)(Table + AMI_RB0_PMEM64_SELECTOR_OFFSET));
+  Length      = ReadUnaligned64 ((CONST UINT64 *)(Table + AMI_RB0_PMEM64_LENGTH_OFFSET));
+  Base        = ReadUnaligned64 ((CONST UINT64 *)(Table + AMI_RB0_PMEM64_BASE_OFFSET));
+
+  if (EntryStatus != AMI_EXPECTED_STATUS_ACTIVE ||
+      Selector != AMI_EXPECTED_SELECTOR_PMEM64 ||
+      Length != AMI_EXPECTED_HIGH_MMIO_LENGTH) {
+    return; // Fail-closed: table layout or dimensions mismatch
+  }
+
+  // 4. Idempotent check: if already synchronized to High-MMIO Base, exit
+  if (Base == AMI_EXPECTED_HIGH_MMIO_BASE) {
+    return;
+  }
+
+  // 5. Strict known-state check: only synchronize if Base is exactly 0 (stale uninitialized state)
+  if (Base != 0) {
+    return; // Fail-closed: unknown non-zero state, do not overwrite
+  }
+
+  // 6. Verify authoritative continuous GCD High-MMIO coverage [128GiB, 192GiB)
+  Cursor      = AMI_EXPECTED_HIGH_MMIO_BASE;
+  ExpectedEnd = AMI_EXPECTED_HIGH_MMIO_BASE + AMI_EXPECTED_HIGH_MMIO_LENGTH;
+
+  while (Cursor < ExpectedEnd) {
+    Status = gDS->GetMemorySpaceDescriptor (Cursor, &GcdDesc);
+    if (EFI_ERROR (Status)) {
+      return; // Fail-closed: cannot read GCD descriptor
+    }
+
+    if (GcdDesc.GcdMemoryType != EfiGcdMemoryTypeMemoryMappedIo ||
+        GcdDesc.BaseAddress > Cursor ||
+        GcdDesc.Length == 0 ||
+        (GcdDesc.Attributes & EFI_MEMORY_UC) == 0 ||
+        GcdDesc.ImageHandle != NULL) {
+      return; // Fail-closed: non-MMIO, not UC-configured, or already allocated
+    }
+
+    DescEnd = GcdDesc.BaseAddress + GcdDesc.Length;
+    if (DescEnd <= Cursor || DescEnd < GcdDesc.BaseAddress) {
+      return; // Fail-closed: non-advancing descriptor or integer overflow
+    }
+
+    Cursor = DescEnd;
+  }
+
+  // 7. Perform single-field, unaligned-safe UINT64 metadata synchronization
+  WriteUnaligned64 ((UINT64 *)(Table + AMI_RB0_PMEM64_BASE_OFFSET), AMI_EXPECTED_HIGH_MMIO_BASE);
+}
+
+EFI_STATUS
+EFIAPI
+NotifyPhaseOverride (
+  IN EFI_PCI_HOST_BRIDGE_RESOURCE_ALLOCATION_PROTOCOL *This,
+  IN EFI_PCI_HOST_BRIDGE_RESOURCE_ALLOCATION_PHASE    Phase
+  )
+{
+  EFI_STATUS Status;
+
+  // Call the original OEM NotifyPhase first
+  Status = o_NotifyPhase (This, Phase);
+
+  // Synchronize metadata ONLY on Phase 0 (BeginEnumeration) after OEM successfully registers High-MMIO
+  if (!EFI_ERROR (Status)) {
+    if (Phase == EfiPciHostBridgeBeginEnumeration) {
+      SyncAmiPciHostBridgeMetadata ();
+    }
+  }
+
+  return Status;
+}
 
 // find last set bit and return the index of it
 INTN fls(UINT32 x)
@@ -248,8 +359,10 @@ EFI_STATUS EFIAPI PreprocessControllerOverride (
 VOID pciHostBridgeResourceAllocationProtocolHook()
 {
     EFI_STATUS status;
-    UINTN handleCount;
-    EFI_HANDLE *handleBuffer;
+    UINTN handleCount = 0;
+    EFI_HANDLE *handleBuffer = NULL;
+    EFI_PCI_HOST_BRIDGE_RESOURCE_ALLOCATION_PROTOCOL_PREPROCESS_CONTROLLER OrigPreprocess;
+    EFI_PCI_HOST_BRIDGE_RESOURCE_ALLOCATION_PROTOCOL_NOTIFY_PHASE OrigNotify;
 
     status = gBS->LocateHandleBuffer(
         ByProtocol,
@@ -258,7 +371,7 @@ VOID pciHostBridgeResourceAllocationProtocolHook()
         &handleCount,
         &handleBuffer);
 
-    if (EFI_ERROR(status))
+    if (EFI_ERROR(status) || handleBuffer == NULL || handleCount != 1)
         goto free;
 
     status = gBS->OpenProtocol(
@@ -269,17 +382,30 @@ VOID pciHostBridgeResourceAllocationProtocolHook()
         NULL,
         EFI_OPEN_PROTOCOL_GET_PROTOCOL);
 
-    if (EFI_ERROR(status))
+    if (EFI_ERROR(status) || pciResAlloc == NULL)
         goto free;
 
-    DEBUG((DEBUG_INFO, "ReBarDXE: Hooking EfiPciHostBridgeResourceAllocationProtocol->PreprocessController\n"));
+    OrigPreprocess = pciResAlloc->PreprocessController;
+    OrigNotify     = pciResAlloc->NotifyPhase;
 
-    // Hook PreprocessController
-    o_PreprocessController = pciResAlloc->PreprocessController;
+    if (OrigPreprocess == NULL || OrigNotify == NULL ||
+        OrigPreprocess == &PreprocessControllerOverride ||
+        OrigNotify == &NotifyPhaseOverride) {
+        goto free;
+    }
+
+    DEBUG((DEBUG_INFO, "ReBarDXE: Hooking EfiPciHostBridgeResourceAllocationProtocol\n"));
+
+    // Hook PreprocessController and NotifyPhase
+    o_PreprocessController = OrigPreprocess;
+    o_NotifyPhase          = OrigNotify;
     pciResAlloc->PreprocessController = &PreprocessControllerOverride;
+    pciResAlloc->NotifyPhase          = &NotifyPhaseOverride;
 
 free:
-    FreePool(handleBuffer);
+    if (handleBuffer != NULL) {
+        FreePool(handleBuffer);
+    }
 }
 
 EFI_STATUS EFIAPI rebarInit(
