@@ -100,17 +100,18 @@ except FileNotFoundError:
 
 # Canonical Dual-Protocol DEPEX:
 # PUSH gEfiPciRootBridgeIoProtocolGuid (2F707EBB-4A1A-11D4-9A38-0090273FC14D)
-# PUSH gEfiPciHostBridgeResourceAllocationProtocolGuid (0CFD3659-4E2C-4170-98B7-9F87F9A9D7CE)
+# PUSH gEfiPciHostBridgeResourceAllocationProtocolGuid (CF8034BE-6768-4D8B-B739-7CCE683A9FBE)
 # AND (0x05)
 # END (0x08)
-CANONICAL_DUAL_DEPEX = bytes.fromhex("02BB7E702F1A4AD4119A380090273FC14D025936FD0C2C4E704198B79F87F9A9D7CE0508")
+CANONICAL_DUAL_DEPEX = bytes.fromhex("02BB7E702F1A4AD4119A380090273FC14D02BE3480CF68678B4DB7397CCE683A9FBE0508")
 
 # Look for compiler-generated ReBarDxe.depex strictly in the same build output tree
-target_dir = os.path.dirname(ReBarDXE[0])
+rebar_efi_abs = os.path.abspath(ReBarDXE[0])
+target_dir_abs = os.path.dirname(rebar_efi_abs)
 candidate_depex_paths = [
-    os.path.join(target_dir, "ReBarDxe.depex"),
-    os.path.join(target_dir, "..", "OUTPUT", "ReBarDxe.depex"),
-    os.path.join(target_dir, "..", "DEBUG", "ReBarDxe.depex")
+    os.path.join(target_dir_abs, "ReBarDxe.depex"),
+    os.path.normpath(os.path.join(target_dir_abs, "..", "OUTPUT", "ReBarDxe.depex")),
+    os.path.normpath(os.path.join(target_dir_abs, "..", "DEBUG", "ReBarDxe.depex"))
 ]
 
 depex_payload = None
@@ -126,8 +127,8 @@ if depex_payload is None:
     depex_payload = CANONICAL_DUAL_DEPEX
 else:
     if depex_payload != CANONICAL_DUAL_DEPEX:
-        print(f"Warning: compiler-generated depex ({depex_payload.hex().upper()}) differs from canonical ({CANONICAL_DUAL_DEPEX.hex().upper()})! Enforcing canonical dual-protocol DEPEX.")
-        depex_payload = CANONICAL_DUAL_DEPEX
+        raise RuntimeError(f"Compiler-generated DEPEX mismatch! Found: {depex_payload.hex().upper()}, Expected: {CANONICAL_DUAL_DEPEX.hex().upper()}")
+    print("Compiler-generated DEPEX strictly verified matching canonical dual-protocol DEPEX.")
 
 with open("depex.raw", "wb") as df:
     df.write(depex_payload)
