@@ -98,14 +98,36 @@ try:
 except FileNotFoundError:
     pass
 
-# Locate compiler-generated depex or use canonical gEfiPciRootBridgeIoProtocolGuid (2F707EBB-4A1A-11D4-9A38-0090273FC14D)
-depex_files = glob.glob(f"{orig_dir}/Build/ReBarUEFI/**/ReBarDxe.depex", recursive=True)
-if len(depex_files) > 0 and os.path.exists(depex_files[0]):
-    with open(depex_files[0], "rb") as f:
-        depex_payload = f.read()
+# Canonical Dual-Protocol DEPEX:
+# PUSH gEfiPciRootBridgeIoProtocolGuid (2F707EBB-4A1A-11D4-9A38-0090273FC14D)
+# PUSH gEfiPciHostBridgeResourceAllocationProtocolGuid (0CFD3659-4E2C-4170-98B7-9F87F9A9D7CE)
+# AND (0x05)
+# END (0x08)
+CANONICAL_DUAL_DEPEX = bytes.fromhex("02BB7E702F1A4AD4119A380090273FC14D025936FD0C2C4E704198B79F87F9A9D7CE0508")
+
+# Look for compiler-generated ReBarDxe.depex strictly in the same build output tree
+target_dir = os.path.dirname(ReBarDXE[0])
+candidate_depex_paths = [
+    os.path.join(target_dir, "ReBarDxe.depex"),
+    os.path.join(target_dir, "..", "OUTPUT", "ReBarDxe.depex"),
+    os.path.join(target_dir, "..", "DEBUG", "ReBarDxe.depex")
+]
+
+depex_payload = None
+for p in candidate_depex_paths:
+    if os.path.exists(p):
+        with open(p, "rb") as f:
+            depex_payload = f.read()
+        print(f"Loaded compiler-generated depex from: {os.path.normpath(p)}")
+        break
+
+if depex_payload is None:
+    print("Notice: compiler-generated depex not found in target dir; using canonical dual-protocol DEPEX.")
+    depex_payload = CANONICAL_DUAL_DEPEX
 else:
-    # EFI_DEP_PUSH (0x02) + gEfiPciRootBridgeIoProtocolGuid (2F707EBB-4A1A-11D4-9A38-0090273FC14D) + EFI_DEP_END (0x08)
-    depex_payload = bytes.fromhex("02BB7E702F1A4AD4119A380090273FC14D08")
+    if depex_payload != CANONICAL_DUAL_DEPEX:
+        print(f"Warning: compiler-generated depex ({depex_payload.hex().upper()}) differs from canonical ({CANONICAL_DUAL_DEPEX.hex().upper()})! Enforcing canonical dual-protocol DEPEX.")
+        depex_payload = CANONICAL_DUAL_DEPEX
 
 with open("depex.raw", "wb") as df:
     df.write(depex_payload)

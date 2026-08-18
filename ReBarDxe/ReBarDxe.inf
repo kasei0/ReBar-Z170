@@ -26,7 +26,8 @@
   gEfiPciHostBridgeResourceAllocationProtocolGuid ## SOMETIMES_CONSUMES
 
 [Depex]
-  gEfiPciRootBridgeIoProtocolGuid
+  gEfiPciRootBridgeIoProtocolGuid AND
+  gEfiPciHostBridgeResourceAllocationProtocolGuid
 
 [BuildOptions]
   GCC:*_*_*_CC_FLAGS        = -flto -DUSING_LTO -Wextra -Wno-unused-parameter
