@@ -2,9 +2,9 @@ name: ReBarDxe EDK2
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "master", "stock-baseline" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "master", "stock-baseline" ]
 env:
   TARGET: RELEASE
   TARGET_ARCH: X64
