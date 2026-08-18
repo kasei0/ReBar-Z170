@@ -64,8 +64,7 @@ jobs:
     - name: Build RebarDxe
       shell: cmd
       run: |
-        call edksetup.bat
-        python .\ReBarUEFI\ReBarDxe\buildffs.py RELEASE
+        call .\ReBarUEFI\.github\workflows\buildffs.bat
 
     - name: Upload ReBarDxe artifact (Windows)
       uses: actions/upload-artifact@v4
