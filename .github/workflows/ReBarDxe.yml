@@ -48,11 +48,12 @@ jobs:
         repository: 'tianocore/edk2'
         ref: 'edk2-stable202508'
         submodules: 'recursive'
+        path: '.'
 
     - name: Download RebarUEFI
       uses: actions/checkout@v4
       with:
-        path: '.\ReBarUEFI\'
+        path: './ReBarUEFI/'
 
     - name: Setup & Build BaseTools
       shell: cmd

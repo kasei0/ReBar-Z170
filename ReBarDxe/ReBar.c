@@ -33,7 +33,7 @@ EFI_GUID gAmiPciHostBridgeInitProtocolGuid = AMI_PCI_HOST_BRIDGE_INIT_PROTOCOL_G
 #define BUILD_YEAR 2023
 
 // a3c5b77a-c88f-4a93-bf1c-4a92a32c65ce
-static GUID reBarStateGuid = { 0xa3c5b77a, 0xc88f, 0x4a93, {0xbf, 0x1c, 0x4a, 0x92, 0xa3, 0x2c, 0x65, 0xce}};
+static EFI_GUID reBarStateGuid = { 0xa3c5b77a, 0xc88f, 0x4a93, {0xbf, 0x1c, 0x4a, 0x92, 0xa3, 0x2c, 0x65, 0xce}};
 
 // 0: disabled
 // >0: maximum BAR size (2^x) set to value. UINT8_MAX for unlimited
