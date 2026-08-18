@@ -64,7 +64,7 @@ if toolchain:
     cmd.extend(["-t", toolchain])
 
 print("Running:", " ".join(cmd))
-subprocess.run(cmd, shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout)
+subprocess.run(cmd, shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout, check=True)
 
 ReBarDXE = glob.glob(f"./Build/ReBarUEFI/{buildtype}_*/X64/ReBarDxe.efi")
 

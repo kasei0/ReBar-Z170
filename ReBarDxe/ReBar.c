@@ -153,18 +153,20 @@ NotifyPhaseOverride (
 // find last set bit and return the index of it
 INTN fls(UINT32 x)
 {
-    UINT32 r;
-
     #ifdef _MSC_VER
-    _BitScanReverse64(&r, x);
+    unsigned long r = 0;
+    if (_BitScanReverse(&r, (unsigned long)x)) {
+        return (INTN)r;
+    }
+    return -1;
     #else
+    UINT32 r;
     // taken from linux x86 bitops.h
     asm("bsrl %1,%0"
 	    : "=r" (r)
 	    : "rm" (x), "0" (-1));
-    #endif
-
     return r;
+    #endif
 }
 
 UINT64 pciAddrOffset(UINTN pciAddress, INTN offset)
