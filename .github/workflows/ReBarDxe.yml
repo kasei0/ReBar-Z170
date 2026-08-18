@@ -11,59 +11,67 @@ env:
 
 jobs:
   rebardxe-windows:
-    runs-on: windows-2025
+    runs-on: windows-2022
 
     env:
       TOOL_CHAIN_TAG: VS2022
 
     steps:
-    - uses: actions/setup-python@v4.3.0
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
     - run: pip install pefile
 
     - name: Support long filenames
       run: git config --system core.longpaths true
 
-    # save nasm
-    - name: cache nasm
-      id: cache-nasm
-      uses: actions/cache@v3
+    - name: Set up MSVC environment
+      uses: ilammy/msvc-dev-cmd@v1
       with:
-        path: C:\nasm
-        key: nasm-path
+        arch: x64
 
-    # edk2's setup script checks for nasm only at 'C:\nasm' so install it there
-    - name: install nasm
-      if: steps.cache-nasm.outputs.cache-hit != 'true'
+    - name: Install NASM
       shell: powershell
       run: |
-        md C:\nasm
-        Invoke-WebRequest -Uri "https://www.nasm.us/pub/nasm/releasebuilds/2.15.05/win64/nasm-2.15.05-win64.zip" -OutFile "C:\nasm\nasm.zip"
-        cd C:\nasm
-        7z e nasm.zip
+        if (!(Test-Path "C:\nasm\nasm.exe")) {
+          New-Item -ItemType Directory -Force -Path "C:\nasm"
+          Invoke-WebRequest -Uri "https://www.nasm.us/pub/nasm/releasebuilds/2.15.05/win64/nasm-2.15.05-win64.zip" -OutFile "C:\nasm\nasm.zip"
+          Expand-Archive -Path "C:\nasm\nasm.zip" -DestinationPath "C:\nasm\temp" -Force
+          Copy-Item "C:\nasm\temp\nasm-2.15.05\*" "C:\nasm\" -Force
+        }
+        echo "C:\nasm" >> $env:GITHUB_PATH
+        echo "NASM_PREFIX=C:\nasm\" >> $env:GITHUB_ENV
 
     - name: Download edk2
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         repository: 'tianocore/edk2'
         ref: 'edk2-stable202508'
         submodules: 'recursive'
 
     - name: Download RebarUEFI
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         path: '.\ReBarUEFI\'
 
-    - name: Setup EDK2
-      run: .\edksetup.bat Rebuild
+    - name: Setup & Build BaseTools
+      shell: cmd
+      run: |
+        call edksetup.bat Rebuild
 
     - name: Build RebarDxe
-      run: .\ReBarUEFI\.github\workflows\buildffs.bat
+      shell: cmd
+      run: |
+        call edksetup.bat
+        python .\ReBarUEFI\ReBarDxe\buildffs.py RELEASE
 
-    - name: Upload ReBarDxe artifact
-      uses: actions/upload-artifact@master
+    - name: Upload ReBarDxe artifact (Windows)
+      uses: actions/upload-artifact@v4
       with:
         name: ReBarDxe (built on Windows)
-        path: ${{github.workspace}}/Build/ReBarUEFI/RELEASE_VS2022/X64/ReBarDxe.ffs
+        path: |
+          Build/ReBarUEFI/RELEASE_VS2022/X64/ReBarDxe.efi
+          Build/ReBarUEFI/RELEASE_VS2022/X64/ReBarDxe.ffs
 
 
   rebardxe-linux:
@@ -73,11 +81,13 @@ jobs:
       TOOL_CHAIN_TAG: GCC
 
     steps:
-    - uses: actions/setup-python@v4.3.0
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
     - run: pip install pefile
 
     - name: Download edk2
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         repository: 'tianocore/edk2'
         ref: 'edk2-stable202508'
@@ -85,12 +95,12 @@ jobs:
         path: '.'
 
     - name: Download RebarUEFI
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         path: './ReBarUEFI/'
 
     - name: Install dependencies
-      run: sudo apt install build-essential uuid-dev iasl git nasm python-is-python3
+      run: sudo apt update && sudo apt install -y build-essential uuid-dev iasl git nasm python-is-python3
 
     - name: Build Base Tools
       run: make -C ./BaseTools/
@@ -101,8 +111,10 @@ jobs:
     - name: Build RebarDxe
       run: ./ReBarUEFI/.github/workflows/buildffs.sh
 
-    - name: Upload ReBarDxe artifact
-      uses: actions/upload-artifact@master
+    - name: Upload ReBarDxe artifact (Linux)
+      uses: actions/upload-artifact@v4
       with:
         name: ReBarDxe (built on Linux)
-        path: ${{github.workspace}}/Build/ReBarUEFI/RELEASE_GCC/X64/ReBarDxe.ffs
+        path: |
+          Build/ReBarUEFI/RELEASE_GCC/X64/ReBarDxe.efi
+          Build/ReBarUEFI/RELEASE_GCC/X64/ReBarDxe.ffs
