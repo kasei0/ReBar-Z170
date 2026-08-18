@@ -7,7 +7,6 @@ import os
 import sys
 import glob
 import subprocess
-import glob
 from pefile import PE
 
 name = "ReBarDxe"
@@ -15,14 +14,14 @@ version = "1.0"
 GUID = "a8ee1777-a4f5-4345-9da4-13742084d31e"
 shell = sys.platform == "win32"
 buildtype = "RELEASE"
-
+target_arch = os.environ.get("TARGET_ARCH", "X64")
+toolchain = os.environ.get("TOOL_CHAIN_TAG", "VS2022" if sys.platform == "win32" else "GCC")
 
 def target_update(filep, p, v):
-    # Read in the file
-    with open(filep, 'r') as file :
+    if not os.path.exists(filep):
+        return
+    with open(filep, 'r') as file:
         lines = file.read()
-
-    # Write the file out again
     with open(filep, 'w') as file:
         for i, l in enumerate(lines.splitlines()):
             if l.split('=')[0].strip() == p:
@@ -45,25 +44,33 @@ def set_nx_compat_flag(pe):
 if len(sys.argv) > 1:
     buildtype = sys.argv[1].upper()
 
-# 3 arguments = Github Actions
-if len(sys.argv) == 3:
-    print("TARGET: ", os.environ['TARGET'])
-    print("TARGET_ARCH: ", os.environ['TARGET_ARCH'])
-    print("TOOL_CHAIN_TAG: ", os.environ['TOOL_CHAIN_TAG'])
-
-    # setup Conf/target.txt
-    target_update("./Conf/target.txt", "TARGET", os.environ['TARGET'])
-    target_update("./Conf/target.txt", "TARGET_ARCH", os.environ['TARGET_ARCH'])
-    target_update("./Conf/target.txt", "TOOL_CHAIN_TAG", os.environ['TOOL_CHAIN_TAG'])
-else:
+# Ensure we are in EDK2 workspace root
+if not os.path.exists("Conf") and os.path.exists("../../Conf"):
     os.chdir("../..")
 
-subprocess.run(["build", "--platform=ReBarUEFI/ReBarDxe/ReBar.dsc"], shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout)
+print("TARGET: ", buildtype)
+print("TARGET_ARCH: ", target_arch)
+print("TOOL_CHAIN_TAG: ", toolchain)
+
+# Update Conf/target.txt if present
+if os.path.exists("./Conf/target.txt"):
+    target_update("./Conf/target.txt", "TARGET", buildtype)
+    target_update("./Conf/target.txt", "TARGET_ARCH", target_arch)
+    if toolchain:
+        target_update("./Conf/target.txt", "TOOL_CHAIN_TAG", toolchain)
+
+# Explicitly pass target, arch, toolchain to build command
+cmd = ["build", "-p", "ReBarUEFI/ReBarDxe/ReBar.dsc", "-a", target_arch, "-b", buildtype]
+if toolchain:
+    cmd.extend(["-t", toolchain])
+
+print("Running:", " ".join(cmd))
+subprocess.run(cmd, shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout)
 
 ReBarDXE = glob.glob(f"./Build/ReBarUEFI/{buildtype}_*/X64/ReBarDxe.efi")
 
 if len(ReBarDXE) != 1:
-    print("Build failed")
+    print("Build failed: found", ReBarDXE)
     sys.exit(1)
 
 # set NX_COMPAT
@@ -73,8 +80,9 @@ set_nx_compat_flag(pe)
 os.remove(ReBarDXE[0])
 pe.write(ReBarDXE[0])
 
-print(ReBarDXE[0])
-print("Building FFS")
+print("PE output:", ReBarDXE[0])
+print("Building FFS...")
+orig_dir = os.getcwd()
 os.chdir(os.path.dirname(ReBarDXE[0]))
 
 try:
@@ -86,7 +94,7 @@ except FileNotFoundError:
 
 subprocess.run(["GenSec", "-o", "pe32.sec", "ReBarDxe.efi", "-S", "EFI_SECTION_PE32"], shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout)
 subprocess.run(["GenSec", "-o", "name.sec", "-S", "EFI_SECTION_USER_INTERFACE", "-n", name], shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout)
-subprocess.run(["GenFfs", "-g", GUID, "-o", "ReBarDxe.ffs", "-i", "pe32.sec", "-i" ,"name.sec", "-t", "EFI_FV_FILETYPE_DRIVER", "--checksum"], shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout)
+subprocess.run(["GenFfs", "-g", GUID, "-o", "ReBarDxe.ffs", "-i", "pe32.sec", "-i", "name.sec", "-t", "EFI_FV_FILETYPE_DRIVER", "--checksum"], shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout)
 
 try:
     os.remove("pe32.sec")
@@ -94,4 +102,5 @@ try:
 except FileNotFoundError:
     pass
 
-print("Finished")
+os.chdir(orig_dir)
+print("Finished building FFS successfully!")
