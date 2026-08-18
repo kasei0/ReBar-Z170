@@ -30,6 +30,11 @@ jobs:
       with:
         arch: x64
 
+    - name: Configure VS2022_PREFIX for EDK2
+      shell: powershell
+      run: |
+        echo "VS2022_PREFIX=$env:VCToolsInstallDir" >> $env:GITHUB_ENV
+
     - name: Install NASM
       shell: powershell
       run: |

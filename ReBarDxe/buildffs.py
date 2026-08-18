@@ -16,6 +16,10 @@ shell = sys.platform == "win32"
 buildtype = "RELEASE"
 target_arch = os.environ.get("TARGET_ARCH", "X64")
 toolchain = os.environ.get("TOOL_CHAIN_TAG", "VS2022" if sys.platform == "win32" else "GCC")
+if sys.platform == "win32" and "VS2022_PREFIX" not in os.environ:
+    vctools = os.environ.get("VCToolsInstallDir", "")
+    if vctools:
+        os.environ["VS2022_PREFIX"] = vctools
 
 def target_update(filep, p, v):
     if not os.path.exists(filep):
