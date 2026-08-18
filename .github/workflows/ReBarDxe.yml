@@ -57,6 +57,7 @@ jobs:
     - name: Setup & Build BaseTools
       shell: cmd
       run: |
+        set CL=/wd4311 /wd4312 /wd4303 /wd4302 /wd4267 /wd4244 /WX-
         call edksetup.bat Rebuild
 
     - name: Build RebarDxe
