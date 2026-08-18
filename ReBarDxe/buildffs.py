@@ -66,10 +66,12 @@ if toolchain:
 print("Running:", " ".join(cmd))
 subprocess.run(cmd, shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout, check=True)
 
-ReBarDXE = glob.glob(f"./Build/ReBarUEFI/{buildtype}_*/X64/ReBarDxe.efi")
+ReBarDXE = glob.glob(f"./Build/ReBarUEFI/{buildtype}_*/X64/**/ReBarDxe.efi", recursive=True)
+if len(ReBarDXE) == 0:
+    ReBarDXE = glob.glob(f"./Build/ReBarUEFI/**/ReBarDxe.efi", recursive=True)
 
-if len(ReBarDXE) != 1:
-    print("Build failed: found", ReBarDXE)
+if len(ReBarDXE) == 0:
+    print("Build failed: no ReBarDxe.efi found in Build directory")
     sys.exit(1)
 
 # set NX_COMPAT

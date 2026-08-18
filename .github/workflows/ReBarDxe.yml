@@ -71,8 +71,8 @@ jobs:
       with:
         name: ReBarDxe (built on Windows)
         path: |
-          Build/ReBarUEFI/RELEASE_VS2022/X64/ReBarDxe.efi
-          Build/ReBarUEFI/RELEASE_VS2022/X64/ReBarDxe.ffs
+          Build/ReBarUEFI/**/ReBarDxe.efi
+          Build/ReBarUEFI/**/ReBarDxe.ffs
 
 
   rebardxe-linux:
