@@ -15,8 +15,6 @@ jobs:
 
     env:
       TOOL_CHAIN_TAG: VS2022
-      _CL_: "/wd4319 /wd4311 /wd4312 /wd4303 /wd4302 /wd4267 /wd4244 /wd4068 /wd4477"
-      CL: "/wd4319 /wd4311 /wd4312 /wd4303 /wd4302 /wd4267 /wd4244 /wd4068 /wd4477"
 
     steps:
     - uses: actions/setup-python@v5
@@ -64,7 +62,8 @@ jobs:
     - name: Build RebarDxe
       shell: cmd
       run: |
-        call .\ReBarUEFI\.github\workflows\buildffs.bat
+        call edksetup.bat
+        python .\ReBarUEFI\ReBarDxe\buildffs.py RELEASE
 
     - name: Upload ReBarDxe artifact (Windows)
       uses: actions/upload-artifact@v4
