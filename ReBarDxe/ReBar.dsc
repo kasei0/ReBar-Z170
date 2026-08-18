@@ -23,7 +23,6 @@
 	BaseLib|MdePkg/Library/BaseLib/BaseLib.inf
 	PcdLib|MdePkg/Library/BasePcdLibNull/BasePcdLibNull.inf
 	BaseMemoryLib|MdePkg/Library/BaseMemoryLib/BaseMemoryLib.inf
-	DxeServicesTableLib|MdePkg/Library/DxeServicesTableLib/DxeServicesTableLib.inf
 	ShellLib|ShellPkg/Library/UefiShellLib/UefiShellLib.inf
 	MemoryAllocationLib|MdePkg/Library/UefiMemoryAllocationLib/UefiMemoryAllocationLib.inf
 	DevicePathLib|MdePkg/Library/UefiDevicePathLib/UefiDevicePathLib.inf
