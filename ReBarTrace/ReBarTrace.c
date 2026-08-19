@@ -128,9 +128,25 @@ UefiMain (
     return Status;
   }
 
+  // Defensive Bounds & Structure Checks
   if (Trace->Signature != REBAR_TRACE_SIGNATURE) {
-    Print (L"[-] Trace protocol signature mismatch: 0x%08X (Expected: 0x%08X)\n", Trace->Signature, REBAR_TRACE_SIGNATURE);
+    Print (L"[-] Trace signature mismatch: 0x%08X (Expected: 0x%08X)\n", Trace->Signature, REBAR_TRACE_SIGNATURE);
     return EFI_UNSUPPORTED;
+  }
+
+  if (Trace->Version != REBAR_TRACE_VERSION) {
+    Print (L"[-] Trace protocol version mismatch: %u (Expected: %u)\n", Trace->Version, REBAR_TRACE_VERSION);
+    return EFI_INCOMPATIBLE_VERSION;
+  }
+
+  if (Trace->Size < sizeof (REBAR_TRACE_PROTOCOL)) {
+    Print (L"[-] Trace size too small: %u bytes (Expected >= %u)\n", Trace->Size, (UINT32)sizeof (REBAR_TRACE_PROTOCOL));
+    return EFI_BAD_BUFFER_SIZE;
+  }
+
+  if (Trace->EventCount > REBAR_TRACE_MAX_EVENTS) {
+    Print (L"[-] Trace event count corrupted: %u (Max: %u)\n", Trace->EventCount, REBAR_TRACE_MAX_EVENTS);
+    return EFI_VOLUME_CORRUPTED;
   }
 
   Print (L"[+] Trace Protocol Located @ 0x%p (v%u)\n\n", Trace, Trace->Version);

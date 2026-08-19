@@ -21,5 +21,10 @@
   BaseLib
   BaseMemoryLib
 
-[Protocols]
-  gEfiPciRootBridgeIoProtocolGuid
+[BuildOptions]
+  GCC:*_*_*_CC_FLAGS        = -flto -DUSING_LTO -Wextra -Wno-unused-parameter
+  GCC:*_*_*_DLINK_FLAGS     = -flto
+  MSFT:*_*_*_CC_FLAGS       = /GL /DUSING_LTO /W4 /WX-
+  GCC:RELEASE_*_*_CC_FLAGS   = -DMDEPKG_NDEBUG
+  INTEL:RELEASE_*_*_CC_FLAGS = /D MDEPKG_NDEBUG
+  MSFT:RELEASE_*_*_CC_FLAGS  = /D MDEPKG_NDEBUG

@@ -91,7 +91,7 @@ typedef enum {
     RB_EVENT_BEGIN_ENUM_EXIT
 } REBAR_EVENT_ID;
 
-// Fixed 16-byte event structure (64-bit Status for x64 EFI_STATUS error bits)
+// Fixed 24-byte event structure (64-bit Status for x64 EFI_STATUS error bits)
 typedef struct {
     UINT16      EventId;
     UINT16      Flags;

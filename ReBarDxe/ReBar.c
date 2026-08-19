@@ -30,6 +30,7 @@ EFI_GUID gReBarTraceProtocolGuid          = REBAR_TRACE_PROTOCOL_GUID;
 
 #define PCI_POSSIBLE_ERROR(val) ((val) == 0xffffffff)
 #define PCI_VENDOR_ID_ATI       0x1002
+#define TARGET_GPU_DEVICE_ID    0x7551
 #define BUILD_YEAR              2023
 
 // F22j OEM PciHostBridge Callback RVA offsets
@@ -299,25 +300,35 @@ NotifyPhaseOverride (
   mTrace.NotifyCallCount++;
   ReBarTraceLogEvent (RB_EVENT_BEGIN_ENUM_ENTER, (UINT16)Phase, 0, 0);
 
-  // 1. Always call OEM callback FIRST!
+  // 1. Immediately disarm feature gate BEFORE calling OEM on BeginEnumeration
+  //    Eliminates any possible stale-armed window across multiple phases or reconnects
+  if (Phase == EfiPciHostBridgeBeginEnumeration) {
+    mFeatureArmed = FALSE;
+  }
+
+  // 2. Call OEM callback
   Status = o_NotifyPhase (This, Phase);
 
-  // 2. Synchronize metadata ONLY on Phase 0 (BeginEnumeration)
-  if (Phase == EfiPciHostBridgeBeginEnumeration) {
-    mTrace.OemBeginEnumerationStatus = Status;
-    ReBarTraceLogEvent (RB_EVENT_OEM_BEGIN_ENUM_RETURN, 0, Status, 0);
-
-    // Reset Feature Gate at start of every BeginEnumeration phase
+  // 3. Fail-open: If ANY OEM NotifyPhase returns error, ensure feature gate stays disarmed
+  if (EFI_ERROR (Status)) {
     mFeatureArmed = FALSE;
-
-    if (EFI_ERROR (Status)) {
+    mTrace.FeatureArmed = 0;
+    if (Phase == EfiPciHostBridgeBeginEnumeration) {
+      mTrace.OemBeginEnumerationStatus = Status;
       mTrace.FailureBitmap |= (1ULL << 4);
       mTrace.LastReason     = RB_REASON_OEM_BEGIN_ENUM_FAILED;
       mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
+      ReBarTraceLogEvent (RB_EVENT_OEM_BEGIN_ENUM_RETURN, 0, Status, 0);
       ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, Status, RB_REASON_OEM_BEGIN_ENUM_FAILED);
-      return Status; // Propagate exact OEM error
     }
+    ReBarTraceLogEvent (RB_EVENT_BEGIN_ENUM_EXIT, (UINT16)Phase, Status, 0);
+    return Status;
+  }
 
+  // 4. Synchronize metadata ONLY on Phase 0 (BeginEnumeration) after OEM succeeded
+  if (Phase == EfiPciHostBridgeBeginEnumeration) {
+    mTrace.OemBeginEnumerationStatus = Status;
+    ReBarTraceLogEvent (RB_EVENT_OEM_BEGIN_ENUM_RETURN, 0, Status, 0);
     mTrace.Milestones |= (1ULL << 8);
 
     // Arm feature gate ONLY if metadata + GCD are 100% verified
@@ -524,10 +535,11 @@ VOID reBarSetupDevice(EFI_HANDLE handle, EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_PCI_ADD
     if (EFI_ERROR(pciReadConfigWord(pciAddress, 2, &did)))
         return;
 
-    if (vid == 0xFFFF || vid == 0x0000)
+    // Safety Candidate Restriction: Strictly mutate ONLY target AMD Radeon AI PRO R9700 (1002:7551)
+    if (vid != PCI_VENDOR_ID_ATI || did != TARGET_GPU_DEVICE_ID)
         return;
 
-    DEBUG((DEBUG_INFO, "ReBarDXE: Device vid:%x did:%x\n", vid, did));
+    DEBUG((DEBUG_INFO, "ReBarDXE: Target GPU detected vid:%04x did:%04x\n", vid, did));
 
     epos = pciFindExtCapability(pciAddress, PCI_EXT_CAP_ID_REBAR);
     if (epos)
