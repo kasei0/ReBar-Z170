@@ -77,19 +77,26 @@ subprocess.run(cmd, shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.s
 # END (0x08)
 CANONICAL_DUAL_DEPEX = bytes.fromhex("02BB7E702F1A4AD4119A380090273FC14D02BE3480CF68678B4DB7397CCE683A9FBE0508")
 
-# 1. Locate unique ReBarDxe.efi artifact strictly BEFORE changing working directory
-target_pattern = f"./Build/ReBarUEFI/{buildtype}_{toolchain}/{target_arch}/**/ReBarDxe.efi"
-rebar_matches = glob.glob(target_pattern, recursive=True)
-if len(rebar_matches) == 0:
-    fallback_pattern = f"./Build/ReBarUEFI/{buildtype}_*/{target_arch}/**/ReBarDxe.efi"
-    rebar_matches = glob.glob(fallback_pattern, recursive=True)
+# 1. Locate the final released ReBarDxe.efi artifact strictly BEFORE changing working directory
+# EDK2 puts the final binary directly at Build/ReBarUEFI/<BuildType>_<ToolChain>/<Arch>/ReBarDxe.efi
+top_efi = os.path.normpath(f"./Build/ReBarUEFI/{buildtype}_{toolchain}/{target_arch}/ReBarDxe.efi")
+if os.path.isfile(top_efi):
+    rebar_matches = [top_efi]
+else:
+    top_matches = glob.glob(f"./Build/ReBarUEFI/{buildtype}_*/{target_arch}/ReBarDxe.efi")
+    if len(top_matches) == 1:
+        rebar_matches = top_matches
+    else:
+        all_matches = glob.glob(f"./Build/ReBarUEFI/{buildtype}_*/{target_arch}/**/ReBarDxe.efi", recursive=True)
+        non_debug = [m for m in all_matches if "/DEBUG/" not in m.replace("\\", "/")]
+        rebar_matches = non_debug if len(non_debug) == 1 else all_matches
 
 if len(rebar_matches) != 1:
-    raise RuntimeError(f"Artifact selection ambiguity: expected exactly 1 ReBarDxe.efi for {buildtype}_{toolchain}/{target_arch}, found {len(rebar_matches)}: {rebar_matches}")
+    raise RuntimeError(f"Artifact selection ambiguity: expected exactly 1 final ReBarDxe.efi for {buildtype}_{toolchain}/{target_arch}, found {len(rebar_matches)}: {rebar_matches}")
 
 rebar_efi_abs = os.path.abspath(rebar_matches[0])
 target_dir_abs = os.path.dirname(rebar_efi_abs)
-print(f"Selected PE artifact: {rebar_efi_abs}")
+print(f"Selected final PE artifact: {rebar_efi_abs}")
 
 # 2. Locate compiler-generated ReBarDxe.depex strictly inside the same toolchain/arch build subtree
 depex_matches = glob.glob(os.path.join(target_dir_abs, "**/ReBarDxe.depex"), recursive=True)
