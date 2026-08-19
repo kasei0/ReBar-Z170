@@ -70,34 +70,6 @@ if toolchain:
 print("Running:", " ".join(cmd))
 subprocess.run(cmd, shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout, check=True)
 
-ReBarDXE = glob.glob(f"./Build/ReBarUEFI/{buildtype}_*/X64/**/ReBarDxe.efi", recursive=True)
-if len(ReBarDXE) == 0:
-    ReBarDXE = glob.glob(f"./Build/ReBarUEFI/**/ReBarDxe.efi", recursive=True)
-
-if len(ReBarDXE) == 0:
-    print("Build failed: no ReBarDxe.efi found in Build directory")
-    sys.exit(1)
-
-# set NX_COMPAT
-pe = PE(ReBarDXE[0])
-set_nx_compat_flag(pe)
-
-os.remove(ReBarDXE[0])
-pe.write(ReBarDXE[0])
-
-print("PE output:", ReBarDXE[0])
-print("Building FFS...")
-orig_dir = os.getcwd()
-os.chdir(os.path.dirname(ReBarDXE[0]))
-
-try:
-    os.remove("pe32.sec")
-    os.remove("name.sec")
-    os.remove("depex.sec")
-    os.remove("ReBarDxe.ffs")
-except FileNotFoundError:
-    pass
-
 # Canonical Dual-Protocol DEPEX:
 # PUSH gEfiPciRootBridgeIoProtocolGuid (2F707EBB-4A1A-11D4-9A38-0090273FC14D)
 # PUSH gEfiPciHostBridgeResourceAllocationProtocolGuid (CF8034BE-6768-4D8B-B739-7CCE683A9FBE)
@@ -105,35 +77,70 @@ except FileNotFoundError:
 # END (0x08)
 CANONICAL_DUAL_DEPEX = bytes.fromhex("02BB7E702F1A4AD4119A380090273FC14D02BE3480CF68678B4DB7397CCE683A9FBE0508")
 
-# Look for compiler-generated ReBarDxe.depex strictly in the same build output tree
-rebar_efi_abs = os.path.abspath(ReBarDXE[0])
+# 1. Locate unique ReBarDxe.efi artifact strictly BEFORE changing working directory
+target_pattern = f"./Build/ReBarUEFI/{buildtype}_{toolchain}/{target_arch}/**/ReBarDxe.efi"
+rebar_matches = glob.glob(target_pattern, recursive=True)
+if len(rebar_matches) == 0:
+    fallback_pattern = f"./Build/ReBarUEFI/{buildtype}_*/{target_arch}/**/ReBarDxe.efi"
+    rebar_matches = glob.glob(fallback_pattern, recursive=True)
+
+if len(rebar_matches) != 1:
+    raise RuntimeError(f"Artifact selection ambiguity: expected exactly 1 ReBarDxe.efi for {buildtype}_{toolchain}/{target_arch}, found {len(rebar_matches)}: {rebar_matches}")
+
+rebar_efi_abs = os.path.abspath(rebar_matches[0])
 target_dir_abs = os.path.dirname(rebar_efi_abs)
+print(f"Selected PE artifact: {rebar_efi_abs}")
+
+# 2. Locate compiler-generated ReBarDxe.depex strictly in the same build output tree
 candidate_depex_paths = [
     os.path.join(target_dir_abs, "ReBarDxe.depex"),
     os.path.normpath(os.path.join(target_dir_abs, "..", "OUTPUT", "ReBarDxe.depex")),
-    os.path.normpath(os.path.join(target_dir_abs, "..", "DEBUG", "ReBarDxe.depex"))
+    os.path.normpath(os.path.join(target_dir_abs, "..", "DEBUG", "ReBarDxe.depex")),
+    os.path.normpath(os.path.join(target_dir_abs, "ReBarUEFI", "ReBarDxe", "OUTPUT", "ReBarDxe.depex"))
 ]
 
-depex_payload = None
+depex_file = None
 for p in candidate_depex_paths:
-    if os.path.exists(p):
-        with open(p, "rb") as f:
-            depex_payload = f.read()
-        print(f"Loaded compiler-generated depex from: {os.path.normpath(p)}")
+    if os.path.isfile(p):
+        depex_file = p
         break
 
-if depex_payload is None:
-    print("Notice: compiler-generated depex not found in target dir; using canonical dual-protocol DEPEX.")
-    depex_payload = CANONICAL_DUAL_DEPEX
-else:
-    if depex_payload != CANONICAL_DUAL_DEPEX:
-        raise RuntimeError(f"Compiler-generated DEPEX mismatch! Found: {depex_payload.hex().upper()}, Expected: {CANONICAL_DUAL_DEPEX.hex().upper()}")
-    print("Compiler-generated DEPEX strictly verified matching canonical dual-protocol DEPEX.")
+if depex_file is None:
+    raise RuntimeError(f"Compiler-generated ReBarDxe.depex not found! Searched: {candidate_depex_paths}. Strict source-to-artifact provenance required.")
+
+with open(depex_file, "rb") as f:
+    depex_payload = f.read()
+
+if depex_payload != CANONICAL_DUAL_DEPEX:
+    raise RuntimeError(f"Compiler-generated DEPEX in {depex_file} ({depex_payload.hex().upper()}) does not match canonical dual-protocol DEPEX ({CANONICAL_DUAL_DEPEX.hex().upper()})! Packaging aborted.")
+
+print(f"Compiler-generated DEPEX strictly verified matching canonical dual-protocol DEPEX from: {os.path.normpath(depex_file)}")
+
+# 3. Set NX_COMPAT flag on PE
+pe = PE(rebar_efi_abs)
+set_nx_compat_flag(pe)
+os.remove(rebar_efi_abs)
+pe.write(rebar_efi_abs)
+print("PE NX_COMPAT updated.")
+
+# 4. Build FFS in target output directory
+print("Building FFS in:", target_dir_abs)
+orig_dir = os.getcwd()
+os.chdir(target_dir_abs)
+
+try:
+    os.remove("pe32.sec")
+    os.remove("name.sec")
+    os.remove("depex.sec")
+    os.remove("depex.raw")
+    os.remove("ReBarDxe.ffs")
+except FileNotFoundError:
+    pass
 
 with open("depex.raw", "wb") as df:
     df.write(depex_payload)
 
-efi_name = os.path.basename(ReBarDXE[0])
+efi_name = os.path.basename(rebar_efi_abs)
 subprocess.run(["GenSec", "-o", "pe32.sec", efi_name, "-S", "EFI_SECTION_PE32"], shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout, check=True)
 subprocess.run(["GenSec", "-o", "name.sec", "-S", "EFI_SECTION_USER_INTERFACE", "-n", name], shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout, check=True)
 subprocess.run(["GenSec", "-o", "depex.sec", "depex.raw", "-S", "EFI_SECTION_DXE_DEPEX"], shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout, check=True)
@@ -148,4 +155,5 @@ except FileNotFoundError:
     pass
 
 os.chdir(orig_dir)
+print("FFS packaging complete.")
 print("Finished building FFS successfully with DXE DEPEX!")
