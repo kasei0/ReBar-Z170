@@ -7,6 +7,7 @@ import os
 import sys
 import glob
 import subprocess
+import uuid
 from pefile import PE
 
 name = "ReBarDxe"
@@ -70,12 +71,23 @@ if toolchain:
 print("Running:", " ".join(cmd))
 subprocess.run(cmd, shell=shell, env=os.environ, stderr=sys.stderr, stdout=sys.stdout, check=True)
 
-# Canonical Dual-Protocol DEPEX:
-# PUSH gEfiPciRootBridgeIoProtocolGuid (2F707EBB-4A1A-11D4-9A38-0090273FC14D)
-# PUSH gEfiPciHostBridgeResourceAllocationProtocolGuid (CF8034BE-6768-4D8B-B739-7CCE683A9FBE)
-# AND (0x05)
-# END (0x08)
-CANONICAL_DUAL_DEPEX = bytes.fromhex("02BB7E702F1A4AD4119A380090273FC14D02BE3480CF68678B4DB7397CCE683A9FBE0508")
+# Canonical Dual-Protocol DEPEX (PI Specification Volume 2, Volume 5):
+# EFI_DEP_PUSH (0x02) + gEfiPciRootBridgeIoProtocolGuid (2F707EBB-4A1A-11D4-9A38-0090273FC14D)
+# EFI_DEP_PUSH (0x02) + gEfiPciHostBridgeResourceAllocationProtocolGuid (CF8034BE-6768-4D8B-B739-7CCE683A9FBE)
+# EFI_DEP_AND  (0x03)
+# EFI_DEP_END  (0x08)
+EFI_DEP_PUSH = 0x02
+EFI_DEP_AND  = 0x03
+EFI_DEP_END  = 0x08
+
+ROOT_BRIDGE_IO_GUID_LE = uuid.UUID("2f707ebb-4a1a-11d4-9a38-0090273fc14d").bytes_le
+HOST_BRIDGE_RA_GUID_LE = uuid.UUID("cf8034be-6768-4d8b-b739-7cce683a9fbe").bytes_le
+
+CANONICAL_DUAL_DEPEX = (
+    bytes([EFI_DEP_PUSH]) + ROOT_BRIDGE_IO_GUID_LE +
+    bytes([EFI_DEP_PUSH]) + HOST_BRIDGE_RA_GUID_LE +
+    bytes([EFI_DEP_AND, EFI_DEP_END])
+)
 
 # 1. Locate the final released ReBarDxe.efi artifact strictly BEFORE changing working directory
 # EDK2 puts the final binary directly at Build/ReBarUEFI/<BuildType>_<ToolChain>/<Arch>/ReBarDxe.efi
@@ -107,8 +119,11 @@ depex_file = os.path.abspath(depex_matches[0])
 with open(depex_file, "rb") as f:
     depex_payload = f.read()
 
+print("Compiler DEPEX :", depex_payload.hex().upper())
+print("Expected DEPEX :", CANONICAL_DUAL_DEPEX.hex().upper())
+
 if depex_payload != CANONICAL_DUAL_DEPEX:
-    raise RuntimeError(f"Compiler-generated DEPEX in {depex_file} ({depex_payload.hex().upper()}) does not match canonical dual-protocol DEPEX ({CANONICAL_DUAL_DEPEX.hex().upper()})! Packaging aborted.")
+    raise RuntimeError(f"Compiler-generated DEPEX in {depex_file} does not match canonical dual-protocol DEPEX (AND)! Packaging aborted.")
 
 print(f"Compiler-generated DEPEX strictly verified matching canonical dual-protocol DEPEX from: {depex_file}")
 
