@@ -91,30 +91,19 @@ rebar_efi_abs = os.path.abspath(rebar_matches[0])
 target_dir_abs = os.path.dirname(rebar_efi_abs)
 print(f"Selected PE artifact: {rebar_efi_abs}")
 
-# 2. Locate compiler-generated ReBarDxe.depex strictly in the same build output tree
-candidate_depex_paths = [
-    os.path.join(target_dir_abs, "ReBarDxe.depex"),
-    os.path.normpath(os.path.join(target_dir_abs, "..", "OUTPUT", "ReBarDxe.depex")),
-    os.path.normpath(os.path.join(target_dir_abs, "..", "DEBUG", "ReBarDxe.depex")),
-    os.path.normpath(os.path.join(target_dir_abs, "ReBarUEFI", "ReBarDxe", "OUTPUT", "ReBarDxe.depex"))
-]
+# 2. Locate compiler-generated ReBarDxe.depex strictly inside the same toolchain/arch build subtree
+depex_matches = glob.glob(os.path.join(target_dir_abs, "**/ReBarDxe.depex"), recursive=True)
+if len(depex_matches) != 1:
+    raise RuntimeError(f"Compiler-generated ReBarDxe.depex ambiguity/missing! Expected 1 under {target_dir_abs}, found {len(depex_matches)}: {depex_matches}")
 
-depex_file = None
-for p in candidate_depex_paths:
-    if os.path.isfile(p):
-        depex_file = p
-        break
-
-if depex_file is None:
-    raise RuntimeError(f"Compiler-generated ReBarDxe.depex not found! Searched: {candidate_depex_paths}. Strict source-to-artifact provenance required.")
-
+depex_file = os.path.abspath(depex_matches[0])
 with open(depex_file, "rb") as f:
     depex_payload = f.read()
 
 if depex_payload != CANONICAL_DUAL_DEPEX:
     raise RuntimeError(f"Compiler-generated DEPEX in {depex_file} ({depex_payload.hex().upper()}) does not match canonical dual-protocol DEPEX ({CANONICAL_DUAL_DEPEX.hex().upper()})! Packaging aborted.")
 
-print(f"Compiler-generated DEPEX strictly verified matching canonical dual-protocol DEPEX from: {os.path.normpath(depex_file)}")
+print(f"Compiler-generated DEPEX strictly verified matching canonical dual-protocol DEPEX from: {depex_file}")
 
 # 3. Set NX_COMPAT flag on PE
 pe = PE(rebar_efi_abs)
