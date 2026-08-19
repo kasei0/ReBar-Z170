@@ -1,0 +1,25 @@
+[Defines]
+  INF_VERSION                    = 1.25
+  BASE_NAME                      = ReBarTrace
+  FILE_GUID                      = 7b2c58e4-8a42-4f31-89e2-349c71a5c6d2
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = UefiMain
+
+[Sources]
+  ReBarTrace.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+  PrintLib
+  BaseLib
+  BaseMemoryLib
+
+[Protocols]
+  gEfiPciRootBridgeIoProtocolGuid

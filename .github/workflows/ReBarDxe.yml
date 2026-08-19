@@ -77,6 +77,7 @@ jobs:
         name: ReBarDxe (built on Windows)
         path: |
           Build/ReBarUEFI/**/ReBarDxe.efi
+          Build/ReBarUEFI/**/ReBarTrace.efi
           Build/ReBarUEFI/**/ReBarDxe.ffs
 
 
@@ -122,5 +123,6 @@ jobs:
       with:
         name: ReBarDxe (built on Linux)
         path: |
-          Build/ReBarUEFI/RELEASE_GCC/X64/ReBarDxe.efi
-          Build/ReBarUEFI/RELEASE_GCC/X64/ReBarDxe.ffs
+          Build/ReBarUEFI/**/ReBarDxe.efi
+          Build/ReBarUEFI/**/ReBarTrace.efi
+          Build/ReBarUEFI/**/ReBarDxe.ffs

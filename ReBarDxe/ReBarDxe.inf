@@ -19,6 +19,8 @@
   UefiRuntimeServicesTableLib
   DxeServicesTableLib
   BaseLib
+  BaseMemoryLib
+  MemoryAllocationLib
   UefiLib
    
 [Protocols]

@@ -10,6 +10,7 @@
 	
 [Components]
 	ReBarUEFI/ReBarDxe/ReBarDxe.inf
+	ReBarUEFI/ReBarTrace/ReBarTrace.inf
 	
 !include MdePkg/MdeLibs.dsc.inc
 [LibraryClasses]

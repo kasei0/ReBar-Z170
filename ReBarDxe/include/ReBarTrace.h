@@ -35,6 +35,8 @@ typedef enum {
     RB_REASON_HOSTBRIDGE_MULTIPLE_HANDLES,
     RB_REASON_UNEXPECTED_NOTIFY_CALLBACK,
     RB_REASON_UNEXPECTED_PREPROCESS_CALLBACK,
+    RB_REASON_CALLBACK_OFFSET_MISMATCH,
+    RB_REASON_PARTIAL_HOOK_STATE,
     RB_REASON_ALREADY_HOOKED,
     RB_REASON_OEM_BEGIN_ENUM_FAILED,
     RB_REASON_AMI_PROTOCOL_NOT_FOUND,
@@ -65,6 +67,8 @@ typedef enum {
     RB_EVENT_HOSTBRIDGE_NOT_FOUND,
     RB_EVENT_CALLBACK_VALIDATED,
     RB_EVENT_CALLBACK_MISMATCH,
+    RB_EVENT_CALLBACK_OFFSET_PASS,
+    RB_EVENT_CALLBACK_OFFSET_FAIL,
     RB_EVENT_NOTIFY_HOOK_INSTALLED,
     RB_EVENT_PREPROCESS_HOOK_INSTALLED,
     RB_EVENT_BEGIN_ENUM_ENTER,
@@ -81,16 +85,18 @@ typedef enum {
     RB_EVENT_PMEM64_SYNCED,
     RB_EVENT_PREPROCESS_ENTER,
     RB_EVENT_PREPROCESS_REBAR_SET,
+    RB_EVENT_PREPROCESS_REBAR_FAIL,
     RB_EVENT_FEATURE_SKIPPED,
     RB_EVENT_FEATURE_APPLIED,
     RB_EVENT_BEGIN_ENUM_EXIT
 } REBAR_EVENT_ID;
 
-// Fixed 16-byte event structure
+// Fixed 16-byte event structure (64-bit Status for x64 EFI_STATUS error bits)
 typedef struct {
     UINT16      EventId;
     UINT16      Flags;
-    UINT32      Status;
+    UINT32      Reserved;
+    UINT64      Status;
     UINT64      Value;
 } REBAR_TRACE_EVENT;
 
@@ -105,6 +111,7 @@ typedef struct _REBAR_TRACE_PROTOCOL {
 
     UINT32                  LastReason;         // REBAR_REASON_CODE
     UINT32                  BootSafetyState;    // REBAR_BOOT_SAFETY_STATE
+    UINT32                  FeatureArmed;       // 1 if High-MMIO/GCD verified and GPU ReBAR writes permitted
 
     EFI_STATUS              EntryStatus;
     EFI_STATUS              OemBeginEnumerationStatus;
@@ -134,10 +141,11 @@ typedef struct _REBAR_TRACE_PROTOCOL {
     UINT64                  GcdLastLength;
 
     UINT32                  GcdLastType;
-    UINT32                  GcdLastAttributes;
+    UINT32                  Reserved2;
+    UINT64                  GcdLastAttributes;  // 64-bit GCD attributes
 
     UINT32                  EventCount;
-    UINT32                  Reserved;
+    UINT32                  Reserved3;
 
     REBAR_TRACE_EVENT       Events[REBAR_TRACE_MAX_EVENTS];
 } REBAR_TRACE_PROTOCOL;

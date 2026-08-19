@@ -10,6 +10,7 @@ SPDX-License-Identifier: MIT
 #include <Protocol/PciRootBridgeIo.h>
 #include <IndustryStandard/Pci22.h>
 #include <Library/MemoryAllocationLib.h>
+#include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
 #include <Library/DxeServicesTableLib.h>
 #include <Library/BaseLib.h>
@@ -31,12 +32,20 @@ EFI_GUID gReBarTraceProtocolGuid          = REBAR_TRACE_PROTOCOL_GUID;
 #define PCI_VENDOR_ID_ATI       0x1002
 #define BUILD_YEAR              2023
 
+// F22j OEM PciHostBridge Callback RVA offsets
+#define OEM_NOTIFY_PHASE_RVA          0x1718ULL
+#define OEM_PREPROCESS_CONTROLLER_RVA 0x22B8ULL
+#define OEM_CALLBACK_DELTA_RVA        (OEM_PREPROCESS_CONTROLLER_RVA - OEM_NOTIFY_PHASE_RVA) // 0xBA0
+
 // a3c5b77a-c88f-4a93-bf1c-4a92a32c65ce
 static EFI_GUID reBarStateGuid = { 0xa3c5b77a, 0xc88f, 0x4a93, {0xbf, 0x1c, 0x4a, 0x92, 0xa3, 0x2c, 0x65, 0xce}};
 
 // 0: disabled
 // >0: maximum BAR size (2^x) set to value. UINT8_MAX for unlimited
 static UINT8 reBarState = 0;
+
+// Hardware Feature Gate: only TRUE after High-MMIO and GCD are 100% verified
+static BOOLEAN mFeatureArmed = FALSE;
 
 static EFI_PCI_HOST_BRIDGE_RESOURCE_ALLOCATION_PROTOCOL *pciResAlloc = NULL;
 static EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL *pciRootBridgeIo = NULL;
@@ -52,20 +61,21 @@ VOID
 ReBarTraceLogEvent (
   IN UINT16 EventId,
   IN UINT16 Flags,
-  IN UINT32 Status,
+  IN UINT64 Status,
   IN UINT64 Value
   )
 {
   if (mTrace.EventCount < REBAR_TRACE_MAX_EVENTS) {
-    mTrace.Events[mTrace.EventCount].EventId = EventId;
-    mTrace.Events[mTrace.EventCount].Flags   = Flags;
-    mTrace.Events[mTrace.EventCount].Status  = Status;
-    mTrace.Events[mTrace.EventCount].Value   = Value;
+    mTrace.Events[mTrace.EventCount].EventId  = EventId;
+    mTrace.Events[mTrace.EventCount].Flags    = Flags;
+    mTrace.Events[mTrace.EventCount].Reserved = 0;
+    mTrace.Events[mTrace.EventCount].Status   = Status;
+    mTrace.Events[mTrace.EventCount].Value    = Value;
     mTrace.EventCount++;
   }
 }
 
-VOID
+BOOLEAN
 SyncAmiPciHostBridgeMetadata (
   VOID
   )
@@ -95,8 +105,8 @@ SyncAmiPciHostBridgeMetadata (
     mTrace.FailureBitmap |= (1ULL << 5);
     mTrace.LastReason     = RB_REASON_AMI_PROTOCOL_NOT_FOUND;
     mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
-    ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, (UINT32)Status, RB_REASON_AMI_PROTOCOL_NOT_FOUND);
-    return;
+    ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, Status, RB_REASON_AMI_PROTOCOL_NOT_FOUND);
+    return FALSE;
   }
   ReBarTraceLogEvent (RB_EVENT_AMI_PROTOCOL_FOUND, 0, 0, (UINT64)(UINTN)AmiHostBridgeInit);
   mTrace.Milestones |= (1ULL << 9);
@@ -112,7 +122,7 @@ SyncAmiPciHostBridgeMetadata (
     mTrace.LastReason     = RB_REASON_AMI_TABLE_NULL;
     mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
     ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, 0, RB_REASON_AMI_TABLE_NULL);
-    return;
+    return FALSE;
   }
 
   if (Count != 1) {
@@ -121,7 +131,7 @@ SyncAmiPciHostBridgeMetadata (
     mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
     ReBarTraceLogEvent (RB_EVENT_ROOTBRIDGE_INVALID, 0, 0, Count);
     ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, 0, RB_REASON_ROOTBRIDGE_COUNT_MISMATCH);
-    return;
+    return FALSE;
   }
   ReBarTraceLogEvent (RB_EVENT_AMI_TABLE_FOUND, 0, 0, (UINT64)(UINTN)Table);
   ReBarTraceLogEvent (RB_EVENT_ROOTBRIDGE_VALID, 0, 0, Count);
@@ -140,7 +150,7 @@ SyncAmiPciHostBridgeMetadata (
     mTrace.LastReason     = RB_REASON_ENTRY_STATUS_MISMATCH;
     mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
     ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, EntryStatus, RB_REASON_ENTRY_STATUS_MISMATCH);
-    return;
+    return FALSE;
   }
 
   if (Selector != AMI_EXPECTED_SELECTOR_PMEM64) {
@@ -148,55 +158,52 @@ SyncAmiPciHostBridgeMetadata (
     mTrace.LastReason     = RB_REASON_SELECTOR_MISMATCH;
     mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
     ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, Selector, RB_REASON_SELECTOR_MISMATCH);
-    return;
+    return FALSE;
   }
 
   if (Length != AMI_EXPECTED_HIGH_MMIO_LENGTH) {
     mTrace.FailureBitmap |= (1ULL << 7);
     mTrace.LastReason     = RB_REASON_LENGTH_MISMATCH;
     mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
-    ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, (UINT32)Length, RB_REASON_LENGTH_MISMATCH);
-    return;
+    ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, Length, RB_REASON_LENGTH_MISMATCH);
+    return FALSE;
   }
 
-  // 4. Idempotent check: if already synchronized to High-MMIO Base, exit
-  if (Base == AMI_EXPECTED_HIGH_MMIO_BASE) {
-    mTrace.LastReason     = RB_REASON_METADATA_ALREADY_SYNCED;
-    mTrace.BootSafetyState = ReBarBootSafetyFeatureApplied;
-    return;
-  }
-
-  // 5. Strict known-state check: only synchronize if Base is exactly 0 (stale uninitialized state)
-  if (Base != 0) {
+  // 4. Strict Base validation: Base must be EITHER 0 (uninitialized) OR 128G (already synced)
+  if (Base != 0 && Base != AMI_EXPECTED_HIGH_MMIO_BASE) {
     mTrace.FailureBitmap |= (1ULL << 7);
     mTrace.LastReason     = RB_REASON_METADATA_NONZERO_BASE;
     mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
-    ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, (UINT32)Base, RB_REASON_METADATA_NONZERO_BASE);
-    return;
+    ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, Base, RB_REASON_METADATA_NONZERO_BASE);
+    return FALSE;
   }
 
-  // 6. Verify authoritative continuous GCD High-MMIO coverage [128GiB, 192GiB)
+  // 5. Verify authoritative continuous GCD High-MMIO coverage [128GiB, 192GiB) (MANDATORY for both Base==0 and Base==128G!)
   Cursor      = AMI_EXPECTED_HIGH_MMIO_BASE;
   ExpectedEnd = AMI_EXPECTED_HIGH_MMIO_BASE + AMI_EXPECTED_HIGH_MMIO_LENGTH;
   ReBarTraceLogEvent (RB_EVENT_GCD_CHECK_BEGIN, 0, 0, Cursor);
 
   while (Cursor < ExpectedEnd) {
+    ZeroMem (&GcdDesc, sizeof (GcdDesc));
     Status = gDS->GetMemorySpaceDescriptor (Cursor, &GcdDesc);
-    mTrace.GcdLastBase       = GcdDesc.BaseAddress;
-    mTrace.GcdLastLength     = GcdDesc.Length;
-    mTrace.GcdLastType       = GcdDesc.GcdMemoryType;
-    mTrace.GcdLastAttributes = (UINT32)GcdDesc.Attributes;
 
+    // PI/EDK2 rule: Check Status FIRST before reading GcdDesc fields!
     if (EFI_ERROR (Status)) {
       mTrace.FailureBitmap |= (1ULL << 8);
       mTrace.LastReason     = RB_REASON_GCD_LOOKUP_FAILED;
       mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
-      ReBarTraceLogEvent (RB_EVENT_GCD_CHECK_FAIL, 0, (UINT32)Status, Cursor);
-      ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, (UINT32)Status, RB_REASON_GCD_LOOKUP_FAILED);
-      return;
+      ReBarTraceLogEvent (RB_EVENT_GCD_CHECK_FAIL, 0, Status, Cursor);
+      ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, Status, RB_REASON_GCD_LOOKUP_FAILED);
+      return FALSE;
     }
 
-    ReBarTraceLogEvent (RB_EVENT_GCD_DESCRIPTOR, (UINT16)GcdDesc.GcdMemoryType, (UINT32)GcdDesc.Attributes, GcdDesc.BaseAddress);
+    // Now safely record verified GcdDesc fields
+    mTrace.GcdLastBase       = GcdDesc.BaseAddress;
+    mTrace.GcdLastLength     = GcdDesc.Length;
+    mTrace.GcdLastType       = GcdDesc.GcdMemoryType;
+    mTrace.GcdLastAttributes = GcdDesc.Attributes;
+
+    ReBarTraceLogEvent (RB_EVENT_GCD_DESCRIPTOR, (UINT16)GcdDesc.GcdMemoryType, GcdDesc.Attributes, GcdDesc.BaseAddress);
 
     if (GcdDesc.GcdMemoryType != EfiGcdMemoryTypeMemoryMappedIo) {
       mTrace.FailureBitmap |= (1ULL << 8);
@@ -204,7 +211,7 @@ SyncAmiPciHostBridgeMetadata (
       mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
       ReBarTraceLogEvent (RB_EVENT_GCD_CHECK_FAIL, 1, GcdDesc.GcdMemoryType, Cursor);
       ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, GcdDesc.GcdMemoryType, RB_REASON_GCD_WRONG_TYPE);
-      return;
+      return FALSE;
     }
 
     if (GcdDesc.BaseAddress > Cursor) {
@@ -213,7 +220,7 @@ SyncAmiPciHostBridgeMetadata (
       mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
       ReBarTraceLogEvent (RB_EVENT_GCD_CHECK_FAIL, 2, 0, GcdDesc.BaseAddress);
       ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, 0, RB_REASON_GCD_BASE_MISMATCH);
-      return;
+      return FALSE;
     }
 
     if (GcdDesc.Length == 0) {
@@ -222,16 +229,16 @@ SyncAmiPciHostBridgeMetadata (
       mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
       ReBarTraceLogEvent (RB_EVENT_GCD_CHECK_FAIL, 3, 0, Cursor);
       ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, 0, RB_REASON_GCD_ZERO_LENGTH);
-      return;
+      return FALSE;
     }
 
     if ((GcdDesc.Attributes & EFI_MEMORY_UC) == 0) {
       mTrace.FailureBitmap |= (1ULL << 9);
       mTrace.LastReason     = RB_REASON_GCD_NOT_UC;
       mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
-      ReBarTraceLogEvent (RB_EVENT_GCD_CHECK_FAIL, 4, (UINT32)GcdDesc.Attributes, Cursor);
-      ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, (UINT32)GcdDesc.Attributes, RB_REASON_GCD_NOT_UC);
-      return;
+      ReBarTraceLogEvent (RB_EVENT_GCD_CHECK_FAIL, 4, GcdDesc.Attributes, Cursor);
+      ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, GcdDesc.Attributes, RB_REASON_GCD_NOT_UC);
+      return FALSE;
     }
 
     if (GcdDesc.ImageHandle != NULL) {
@@ -240,7 +247,7 @@ SyncAmiPciHostBridgeMetadata (
       mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
       ReBarTraceLogEvent (RB_EVENT_GCD_CHECK_FAIL, 5, 0, (UINT64)(UINTN)GcdDesc.ImageHandle);
       ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, 0, RB_REASON_GCD_ALREADY_ALLOCATED);
-      return;
+      return FALSE;
     }
 
     DescEnd = GcdDesc.BaseAddress + GcdDesc.Length;
@@ -250,7 +257,7 @@ SyncAmiPciHostBridgeMetadata (
       mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
       ReBarTraceLogEvent (RB_EVENT_GCD_CHECK_FAIL, 6, 0, DescEnd);
       ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, 0, RB_REASON_GCD_RANGE_OVERFLOW);
-      return;
+      return FALSE;
     }
 
     Cursor = DescEnd;
@@ -260,18 +267,24 @@ SyncAmiPciHostBridgeMetadata (
   mTrace.Milestones |= (1ULL << 11);
 
   // =========================================================================
-  // COMMIT PHASE: Single-Field Atomic Write
+  // COMMIT PHASE: Write only if Base == 0; If already 128G, skip write
   // =========================================================================
-  WriteUnaligned64 ((UINT64 *)(Table + AMI_RB0_PMEM64_BASE_OFFSET), AMI_EXPECTED_HIGH_MMIO_BASE);
+  if (Base == 0) {
+    WriteUnaligned64 ((UINT64 *)(Table + AMI_RB0_PMEM64_BASE_OFFSET), AMI_EXPECTED_HIGH_MMIO_BASE);
+    mTrace.Pmem64BaseAfter  = AMI_EXPECTED_HIGH_MMIO_BASE;
+    mTrace.LastReason       = RB_REASON_METADATA_SYNCED;
+    ReBarTraceLogEvent (RB_EVENT_PMEM64_SYNCED, 0, 0, AMI_EXPECTED_HIGH_MMIO_BASE);
+  } else {
+    mTrace.Pmem64BaseAfter  = Base;
+    mTrace.LastReason       = RB_REASON_METADATA_ALREADY_SYNCED;
+  }
 
-  mTrace.Pmem64BaseAfter  = AMI_EXPECTED_HIGH_MMIO_BASE;
   mTrace.SyncSuccessCount++;
   mTrace.BootSafetyState  = ReBarBootSafetyFeatureApplied;
-  mTrace.LastReason       = RB_REASON_METADATA_SYNCED;
   mTrace.Milestones      |= (1ULL << 12);
-
-  ReBarTraceLogEvent (RB_EVENT_PMEM64_SYNCED, 0, 0, AMI_EXPECTED_HIGH_MMIO_BASE);
   ReBarTraceLogEvent (RB_EVENT_FEATURE_APPLIED, 0, 0, 0);
+
+  return TRUE;
 }
 
 EFI_STATUS
@@ -289,24 +302,30 @@ NotifyPhaseOverride (
   // 1. Always call OEM callback FIRST!
   Status = o_NotifyPhase (This, Phase);
 
-  // 2. Synchronize metadata ONLY on Phase 0 (BeginEnumeration) after OEM succeeds
+  // 2. Synchronize metadata ONLY on Phase 0 (BeginEnumeration)
   if (Phase == EfiPciHostBridgeBeginEnumeration) {
     mTrace.OemBeginEnumerationStatus = Status;
-    ReBarTraceLogEvent (RB_EVENT_OEM_BEGIN_ENUM_RETURN, 0, (UINT32)Status, 0);
+    ReBarTraceLogEvent (RB_EVENT_OEM_BEGIN_ENUM_RETURN, 0, Status, 0);
+
+    // Reset Feature Gate at start of every BeginEnumeration phase
+    mFeatureArmed = FALSE;
 
     if (EFI_ERROR (Status)) {
       mTrace.FailureBitmap |= (1ULL << 4);
       mTrace.LastReason     = RB_REASON_OEM_BEGIN_ENUM_FAILED;
       mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
-      ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, (UINT32)Status, RB_REASON_OEM_BEGIN_ENUM_FAILED);
+      ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, Status, RB_REASON_OEM_BEGIN_ENUM_FAILED);
       return Status; // Propagate exact OEM error
     }
 
     mTrace.Milestones |= (1ULL << 8);
-    SyncAmiPciHostBridgeMetadata ();
+
+    // Arm feature gate ONLY if metadata + GCD are 100% verified
+    mFeatureArmed = SyncAmiPciHostBridgeMetadata ();
+    mTrace.FeatureArmed = mFeatureArmed ? 1 : 0;
   }
 
-  ReBarTraceLogEvent (RB_EVENT_BEGIN_ENUM_EXIT, (UINT16)Phase, (UINT32)Status, 0);
+  ReBarTraceLogEvent (RB_EVENT_BEGIN_ENUM_EXIT, (UINT16)Phase, Status, 0);
   return Status;
 }
 
@@ -461,6 +480,7 @@ INTN pciRebarSetSize(UINTN pciAddress, UINTN epos, UINT8 bar, UINT8 size)
 {
     INTN pos;
     UINT32 ctrl;
+    EFI_STATUS status;
 
     pos = pciRebarFindPos(pciAddress, (INTN)epos, bar);
     if (pos < 0)
@@ -472,14 +492,25 @@ INTN pciRebarSetSize(UINTN pciAddress, UINTN epos, UINT8 bar, UINT8 size)
     ctrl &= (UINT32)~PCI_REBAR_CTRL_BAR_SIZE;
     ctrl |= (UINT32)size << PCI_REBAR_CTRL_BAR_SHIFT;
 
-    pciWriteConfigDword(pciAddress, pos + PCI_REBAR_CTRL, &ctrl);
+    // Write-then-Read-Back Verification
+    status = pciWriteConfigDword(pciAddress, pos + PCI_REBAR_CTRL, &ctrl);
+    if (EFI_ERROR(status))
+        return -1;
+
+    ctrl = 0;
+    if (EFI_ERROR(pciReadConfigDword(pciAddress, pos + PCI_REBAR_CTRL, &ctrl)))
+        return -1;
+
+    if (((ctrl & PCI_REBAR_CTRL_BAR_SIZE) >> PCI_REBAR_CTRL_BAR_SHIFT) != (UINT32)size)
+        return -1; // Write verify failed
+
     return 0;
 }
 
 VOID reBarSetupDevice(EFI_HANDLE handle, EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_PCI_ADDRESS addrInfo)
 {
     UINTN epos;
-    UINT16 vid, did;
+    UINT16 vid = 0, did = 0;
     UINTN pciAddress;
     EFI_STATUS Status;
 
@@ -510,9 +541,12 @@ VOID reBarSetupDevice(EFI_HANDLE handle, EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_PCI_ADD
             for (UINT8 n = MIN((UINT8)fls(rBarS), reBarState); n > 0; n--) {
                 // check if size is supported
                 if (rBarS & (1 << n)) {
-                    pciRebarSetSize(pciAddress, epos, bar, n);
-                    mTrace.Milestones |= (1ULL << 14);
-                    ReBarTraceLogEvent (RB_EVENT_PREPROCESS_REBAR_SET, (UINT16)bar, (UINT32)n, (UINT64)vid | ((UINT64)did << 16));
+                    if (pciRebarSetSize(pciAddress, epos, bar, n) == 0) {
+                        mTrace.Milestones |= (1ULL << 14);
+                        ReBarTraceLogEvent (RB_EVENT_PREPROCESS_REBAR_SET, (UINT16)bar, (UINT64)n, (UINT64)vid | ((UINT64)did << 16));
+                    } else {
+                        ReBarTraceLogEvent (RB_EVENT_PREPROCESS_REBAR_FAIL, (UINT16)bar, (UINT64)n, (UINT64)vid | ((UINT64)did << 16));
+                    }
                     break;
                 }
             }
@@ -529,9 +563,8 @@ EFI_STATUS EFIAPI PreprocessControllerOverride (
 {
     EFI_STATUS status;
 
+    // Increment call count for every invocation
     mTrace.PreprocessCallCount++;
-    ReBarTraceLogEvent (RB_EVENT_PREPROCESS_ENTER, (UINT16)Phase, 0,
-                        EFI_PCI_ADDRESS (PciAddress.Bus, PciAddress.Device, PciAddress.Function, 0));
 
     // 1. Call the original OEM method FIRST
     status = o_PreprocessController(This, RootBridgeHandle, PciAddress, Phase);
@@ -541,8 +574,11 @@ EFI_STATUS EFIAPI PreprocessControllerOverride (
         return status;
     }
 
-    // 3. Setup Resizable BAR before resource collection if enabled
-    if (Phase <= EfiPciBeforeResourceCollection && reBarState > 0) {
+    // 3. Setup Resizable BAR ONLY IF:
+    //    a) Phase is before resource collection
+    //    b) reBarState > 0
+    //    c) High-MMIO / GCD validation was 100% SUCCESSFUL (mFeatureArmed == TRUE)
+    if (Phase <= EfiPciBeforeResourceCollection && reBarState > 0 && mFeatureArmed) {
         reBarSetupDevice(RootBridgeHandle, PciAddress);
     }
 
@@ -556,6 +592,7 @@ VOID pciHostBridgeResourceAllocationProtocolHook()
     EFI_HANDLE *handleBuffer = NULL;
     EFI_PCI_HOST_BRIDGE_RESOURCE_ALLOCATION_PROTOCOL_PREPROCESS_CONTROLLER OrigPreprocess;
     EFI_PCI_HOST_BRIDGE_RESOURCE_ALLOCATION_PROTOCOL_NOTIFY_PHASE OrigNotify;
+    UINT64 CallbackDelta;
 
     status = gBS->LocateHandleBuffer(
         ByProtocol,
@@ -568,7 +605,7 @@ VOID pciHostBridgeResourceAllocationProtocolHook()
         mTrace.FailureBitmap |= (1ULL << 2);
         mTrace.LastReason     = RB_REASON_HOSTBRIDGE_NOT_FOUND;
         mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
-        ReBarTraceLogEvent (RB_EVENT_HOSTBRIDGE_NOT_FOUND, 0, (UINT32)status, 0);
+        ReBarTraceLogEvent (RB_EVENT_HOSTBRIDGE_NOT_FOUND, 0, status, 0);
         goto free;
     }
 
@@ -576,7 +613,7 @@ VOID pciHostBridgeResourceAllocationProtocolHook()
         mTrace.FailureBitmap |= (1ULL << 2);
         mTrace.LastReason     = RB_REASON_HOSTBRIDGE_MULTIPLE_HANDLES;
         mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
-        ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, (UINT32)handleCount, RB_REASON_HOSTBRIDGE_MULTIPLE_HANDLES);
+        ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, handleCount, RB_REASON_HOSTBRIDGE_MULTIPLE_HANDLES);
         goto free;
     }
 
@@ -592,7 +629,7 @@ VOID pciHostBridgeResourceAllocationProtocolHook()
         mTrace.FailureBitmap |= (1ULL << 2);
         mTrace.LastReason     = RB_REASON_HOSTBRIDGE_OPEN_FAILED;
         mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
-        ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, (UINT32)status, RB_REASON_HOSTBRIDGE_OPEN_FAILED);
+        ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, status, RB_REASON_HOSTBRIDGE_OPEN_FAILED);
         goto free;
     }
 
@@ -610,12 +647,34 @@ VOID pciHostBridgeResourceAllocationProtocolHook()
         goto free;
     }
 
-    if (OrigPreprocess == &PreprocessControllerOverride || OrigNotify == &NotifyPhaseOverride) {
+    // Check if ALREADY hooked by another instance of ReBarDxe
+    if (OrigPreprocess == &PreprocessControllerOverride && OrigNotify == &NotifyPhaseOverride) {
         mTrace.LastReason     = RB_REASON_ALREADY_HOOKED;
         ReBarTraceLogEvent (RB_EVENT_CALLBACK_VALIDATED, 1, 0, 0);
         goto free;
     }
 
+    if (OrigPreprocess == &PreprocessControllerOverride || OrigNotify == &NotifyPhaseOverride) {
+        mTrace.FailureBitmap |= (1ULL << 3);
+        mTrace.LastReason     = RB_REASON_PARTIAL_HOOK_STATE;
+        mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
+        ReBarTraceLogEvent (RB_EVENT_CALLBACK_MISMATCH, 1, 0, 0);
+        goto free;
+    }
+
+    // Strict OEM Callback RVA Delta Validation for Z170 F22j:
+    // OrigPreprocess (0x22B8) - OrigNotify (0x1718) == 0xBA0
+    CallbackDelta = (UINT64)(UINTN)OrigPreprocess - (UINT64)(UINTN)OrigNotify;
+    if (CallbackDelta != OEM_CALLBACK_DELTA_RVA) {
+        mTrace.FailureBitmap |= (1ULL << 3);
+        mTrace.LastReason     = RB_REASON_CALLBACK_OFFSET_MISMATCH;
+        mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
+        ReBarTraceLogEvent (RB_EVENT_CALLBACK_OFFSET_FAIL, 0, CallbackDelta, OEM_CALLBACK_DELTA_RVA);
+        ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, CallbackDelta, RB_REASON_CALLBACK_OFFSET_MISMATCH);
+        goto free;
+    }
+
+    ReBarTraceLogEvent (RB_EVENT_CALLBACK_OFFSET_PASS, 0, 0, CallbackDelta);
     ReBarTraceLogEvent (RB_EVENT_CALLBACK_VALIDATED, 0, 0, 0);
     mTrace.Milestones |= (1ULL << 4);
 
@@ -652,8 +711,17 @@ EFI_STATUS EFIAPI rebarInit(
     EFI_STATUS status;
     UINT32 attributes;
     EFI_TIME time;
+    UINT16 traceYear = 0;
+    VOID *existingTrace = NULL;
 
-    // 1. Initialize fixed-size passive trace protocol state
+    // 1. Anti-Duplicate Detection: Check if Trace Protocol is already installed in system
+    status = gBS->LocateProtocol (&gReBarTraceProtocolGuid, NULL, &existingTrace);
+    if (!EFI_ERROR (status) && existingTrace != NULL) {
+        // Another instance of ReBarDxe is already active
+        return EFI_SUCCESS;
+    }
+
+    // 2. Initialize fixed-size passive trace protocol state
     ZeroMem (&mTrace, sizeof (REBAR_TRACE_PROTOCOL));
     mTrace.Signature        = REBAR_TRACE_SIGNATURE;
     mTrace.Version          = REBAR_TRACE_VERSION;
@@ -666,7 +734,7 @@ EFI_STATUS EFIAPI rebarInit(
 
     ReBarTraceLogEvent (RB_EVENT_ENTRY, 0, 0, 0);
 
-    // 2. Install optional passive RAM-Only Trace Protocol (non-fatal, boot fail-open)
+    // 3. Install optional passive RAM-Only Trace Protocol (non-fatal, boot fail-open)
     status = gBS->InstallProtocolInterface (
                     &imageHandle,
                     &gReBarTraceProtocolGuid,
@@ -675,13 +743,13 @@ EFI_STATUS EFIAPI rebarInit(
                     );
     if (!EFI_ERROR (status)) {
         mTrace.Milestones |= (1ULL << 6);
-        ReBarTraceLogEvent (RB_EVENT_TRACE_PROTOCOL_INSTALLED, 0, (UINT32)status, 0);
+        ReBarTraceLogEvent (RB_EVENT_TRACE_PROTOCOL_INSTALLED, 0, status, 0);
     }
     mTrace.EntryStatus = status;
 
     DEBUG((DEBUG_INFO, "ReBarDXE: Loaded\n"));
 
-    // 3. Read ReBarState variable
+    // 4. Read ReBarState variable
     status = gRT->GetVariable(L"ReBarState", &reBarStateGuid,
         &attributes,
         &bufferSize, &reBarState);
@@ -692,7 +760,7 @@ EFI_STATUS EFIAPI rebarInit(
     }
 
     mTrace.ReBarConfiguredSize = reBarState;
-    ReBarTraceLogEvent (RB_EVENT_VARIABLE_READ, 0, (UINT32)status, reBarState);
+    ReBarTraceLogEvent (RB_EVENT_VARIABLE_READ, 0, status, reBarState);
 
     if (reBarState == 0) {
         mTrace.LastReason      = RB_REASON_VARIABLE_DISABLED;
@@ -704,8 +772,11 @@ EFI_STATUS EFIAPI rebarInit(
     mTrace.Milestones |= (1ULL << 1);
     DEBUG((DEBUG_INFO, "ReBarDXE: Enabled, maximum BAR size 2^%u MB\n", reBarState));
 
-    // 4. Detect CMOS reset by checking if year is before BUILD_YEAR
+    // 5. Detect CMOS reset by checking if year is before BUILD_YEAR
+    ZeroMem (&time, sizeof (time));
     status = gRT->GetTime (&time, NULL);
+    traceYear = EFI_ERROR (status) ? 0 : time.Year;
+
     if (!EFI_ERROR (status) && time.Year < BUILD_YEAR) {
         reBarState = 0;
         bufferSize = 1;
@@ -718,15 +789,15 @@ EFI_STATUS EFIAPI rebarInit(
         mTrace.FailureBitmap  |= (1ULL << 1);
         mTrace.LastReason      = RB_REASON_CMOS_RESET_DETECTED;
         mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
-        ReBarTraceLogEvent (RB_EVENT_CMOS_CHECK, 1, 0, time.Year);
+        ReBarTraceLogEvent (RB_EVENT_CMOS_CHECK, 1, 0, traceYear);
         ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, 0, RB_REASON_CMOS_RESET_DETECTED);
         return EFI_SUCCESS; // Fail-open: continue normal boot
     }
 
     mTrace.Milestones |= (1ULL << 2);
-    ReBarTraceLogEvent (RB_EVENT_CMOS_CHECK, 0, 0, time.Year);
+    ReBarTraceLogEvent (RB_EVENT_CMOS_CHECK, 0, 0, traceYear);
 
-    // 5. For overriding PciHostBridgeResourceAllocationProtocol
+    // 6. For overriding PciHostBridgeResourceAllocationProtocol
     pciHostBridgeResourceAllocationProtocolHook();
 
     return EFI_SUCCESS; // Always return EFI_SUCCESS to guarantee unblocked boot
