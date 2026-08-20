@@ -84,7 +84,6 @@ SyncAmiPciHostBridgeMetadata (
   EFI_STATUS                                Status;
   VOID                                      *AmiHostBridgeInit = NULL;
   UINT8                                     *Table = NULL;
-  UINT64                                    Count = 0;
   UINT32                                    EntryStatus;
   UINT32                                    Selector;
   UINT64                                    Length;
