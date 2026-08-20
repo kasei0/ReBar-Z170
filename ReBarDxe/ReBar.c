@@ -112,30 +112,20 @@ SyncAmiPciHostBridgeMetadata (
   ReBarTraceLogEvent (RB_EVENT_AMI_PROTOCOL_FOUND, 0, 0, (UINT64)(UINTN)AmiHostBridgeInit);
   mTrace.Milestones |= (1ULL << 9);
 
-  // 2. Obtain Table pointer and RootBridge Count
+  // 2. Obtain Table pointer ($PCIDATA) and strictly validate signature
   Table = *(UINT8 **)((UINT8 *)AmiHostBridgeInit + AMI_PROTOCOL_TABLE_OFFSET);
-  Count = *(UINT64 *)((UINT8 *)AmiHostBridgeInit + AMI_PROTOCOL_COUNT_OFFSET);
   mTrace.AmiTable         = (UINT64)(UINTN)Table;
-  mTrace.RootBridgeCount  = (UINT32)Count;
+  mTrace.RootBridgeCount  = 1;
 
-  if (Table == NULL) {
+  if (Table == NULL || CompareMem (Table, AMI_PCIDATA_SIGNATURE_STRING, AMI_PCIDATA_SIGNATURE_LENGTH) != 0) {
     mTrace.FailureBitmap |= (1ULL << 6);
     mTrace.LastReason     = RB_REASON_AMI_TABLE_NULL;
     mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
     ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, 0, RB_REASON_AMI_TABLE_NULL);
     return FALSE;
   }
-
-  if (Count != 1) {
-    mTrace.FailureBitmap |= (1ULL << 6);
-    mTrace.LastReason     = RB_REASON_ROOTBRIDGE_COUNT_MISMATCH;
-    mTrace.BootSafetyState = ReBarBootSafetyFeatureSkipped;
-    ReBarTraceLogEvent (RB_EVENT_ROOTBRIDGE_INVALID, 0, 0, Count);
-    ReBarTraceLogEvent (RB_EVENT_FEATURE_SKIPPED, 0, 0, RB_REASON_ROOTBRIDGE_COUNT_MISMATCH);
-    return FALSE;
-  }
   ReBarTraceLogEvent (RB_EVENT_AMI_TABLE_FOUND, 0, 0, (UINT64)(UINTN)Table);
-  ReBarTraceLogEvent (RB_EVENT_ROOTBRIDGE_VALID, 0, 0, Count);
+  ReBarTraceLogEvent (RB_EVENT_ROOTBRIDGE_VALID, 0, 0, 1);
   mTrace.Milestones |= (1ULL << 10);
 
   // 3. Read and strictly validate PMem64 compact aperture entry invariants

@@ -23,10 +23,11 @@
 extern EFI_GUID gAmiPciHostBridgeInitProtocolGuid;
 
 ///
-/// Protocol Interface offsets (sub_2FB0: rdx+0x10 = Table, rdx+0x18 = Count)
+/// Protocol Interface offsets (AmiBoardInfo2: rdx+0x10 = PciData / Table)
 ///
 #define AMI_PROTOCOL_TABLE_OFFSET         0x10
-#define AMI_PROTOCOL_COUNT_OFFSET         0x18
+#define AMI_PCIDATA_SIGNATURE_STRING      "$PCIDATA"
+#define AMI_PCIDATA_SIGNATURE_LENGTH      8
 
 ///
 /// RootBridge 0 proven compact PMem64 entry.
