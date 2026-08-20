@@ -13,11 +13,12 @@
 #include <Uefi.h>
 
 ///
-/// Protocol GUID from F22j PciHostBridge sub_2FB0 (qword_330)
-/// {3F73C04F-D26F-1B49-A890-5374521BF48F}
+/// Protocol GUID from F22j PciHostBridge sub_2FB0 / AmiBoardInfo2
+/// {4FC0733F-6FD2-491B-A890-5374521BF48F}
+/// Raw bytes in memory: 3F 73 C0 4F D2 6F 1B 49 A8 90 53 74 52 1B F4 8F
 ///
 #define AMI_PCI_HOST_BRIDGE_INIT_PROTOCOL_GUID \
-  { 0x3F73C04F, 0xD26F, 0x1B49, { 0xA8, 0x90, 0x53, 0x74, 0x52, 0x1B, 0xF4, 0x8F } }
+  { 0x4FC0733F, 0x6FD2, 0x491B, { 0xA8, 0x90, 0x53, 0x74, 0x52, 0x1B, 0xF4, 0x8F } }
 
 extern EFI_GUID gAmiPciHostBridgeInitProtocolGuid;
 
