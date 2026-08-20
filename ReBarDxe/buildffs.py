@@ -130,8 +130,10 @@ print(f"Compiler-generated DEPEX strictly verified matching canonical dual-proto
 # 3. Set NX_COMPAT flag on PE
 pe = PE(rebar_efi_abs)
 set_nx_compat_flag(pe)
-os.remove(rebar_efi_abs)
-pe.write(rebar_efi_abs)
+pe_bytes = pe.write()
+pe.close()
+with open(rebar_efi_abs, "wb") as f:
+    f.write(pe_bytes)
 print("PE NX_COMPAT updated.")
 
 # 4. Build FFS in target output directory
